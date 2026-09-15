@@ -1250,9 +1250,15 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
   const transStream = new PassThrough();
   const isSilentModel = model.indexOf('silent') != -1;
   const isThinkModel = model.indexOf('think') != -1 || model.indexOf('zero') != -1;
-  let sentContent = ""; // 记录已发送给客户端的完整内容
-  let sentReasoning = ""; // 记录已发送给客户端的完整思考内容
-  const cachedParts: any[] = []; // 缓存所有逻辑段落
+  let content = "";
+  let thinking = false;
+  let toolCall = false;
+  let codeGenerating = false;
+  let textChunkLength = 0;
+  let thinkingText = "";
+  let codeTemp = "";
+  let lastExecutionOutput = "";
+  let textOffset = 0;
 
   !transStream.closed &&
     transStream.write(
@@ -1278,163 +1284,89 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
       if (_.isError(result))
         throw new Error(`Stream response invalid: ${event.data}`);
       if (result.status != "finish" && result.status != "intervene") {
-        // 更新缓存的parts
-        if (result.parts) {
-          result.parts.forEach((part: any) => {
-            const index = cachedParts.findIndex((p) => p.logic_id === part.logic_id);
-            if (index !== -1) {
-              cachedParts[index] = part;
-            } else {
-              cachedParts.push(part);
+        const text = result.parts.reduce((str, part) => {
+          const { status, content: partContent, meta_data } = part;
+          if (!_.isArray(partContent)) return str;
+          const partText = partContent.reduce((innerStr, value) => {
+            const { status: partStatus, type, text, think, image, code, content: valueContent } = value;
+            if (partStatus == "init" && textChunkLength > 0) {
+              textOffset += textChunkLength + 1;
+              textChunkLength = 0;
+              innerStr += "\n";
             }
-          });
-        }
-
-        // 1. Collect Search Results
-        const searchMap = new Map<string, any>();
-        cachedParts.forEach((part) => {
-            if (!part.content || !_.isArray(part.content)) return;
-            const { meta_data } = part;
-            part.content.forEach((item: any) => {
-                 if (
-                      item.type == "tool_result" &&
-                      meta_data?.tool_result_extra?.search_results
-                    ) {
-                       meta_data.tool_result_extra.search_results.forEach((res: any) => {
-                           if (res.match_key) {
-                               searchMap.set(res.match_key, res);
-                           }
-                       });
-                    }
-            });
-        });
-
-        // 2. Prepare for renumbering
-        const keyToIdMap = new Map<string, number>();
-        let counter = 1;
-
-        // 全量重建所有 parts 的文本和思考内容
-        let fullText = "";
-        let fullReasoning = "";
-
-        cachedParts.forEach((part: any) => {
-            const { content, meta_data } = part;
-            if (!_.isArray(content)) return;
-
-            let partText = "";
-            let partReasoning = "";
-
-            // 处理每个 part 的内容
-            content.forEach((value: any) => {
-                const {
-                  type,
-                  text,
-                  think,
-                  image,
-                  code,
-                  content: innerContent,
-                } = value;
-
-                if (type == "text") {
-                    let txt = text;
-                    if (searchMap.size > 0) {
-                         // Match any turnXsearchY pattern, with optional brackets
-                         txt = txt.replace(/【?(turn\d+[a-zA-Z]+\d+)】?/g, (match: string, key: string) => {
-                             const searchInfo = searchMap.get(key);
-                             if (!searchInfo) {
-                                 return match; // Keep original if not found
-                             }
-
-                             // Assign new ID if not exists
-                             if (!keyToIdMap.has(key)) {
-                                 keyToIdMap.set(key, counter++);
-                             }
-                             const newId = keyToIdMap.get(key);
-
-                             return ` [${newId}](${searchInfo.url})`;
-                         });
-                    }
-                    partText += txt;
-                } else if (type == "think" && !isSilentModel) {
-                    partReasoning += think;
-                } else if (
-                  type == "tool_result" &&
-                  meta_data &&
-                  meta_data.tool_result_extra &&
-                  _.isArray(meta_data.tool_result_extra.search_results) &&
-                  !isSilentModel
-                ) {
-                   const searchText = meta_data.tool_result_extra.search_results.reduce(
-                      (meta: string, v: any) => meta + `> 检索 ${v.title}(${v.url}) ...\n`,
-                      ""
-                   );
-                   partReasoning += searchText;
-                } else if (
-                  type == "quote_result" &&
-                  part.status == "finish" &&
-                  meta_data &&
-                  _.isArray(meta_data.metadata_list) &&
-                  !isSilentModel
-                ) {
-                   const searchText = meta_data.metadata_list.reduce(
-                      (meta: string, v: any) => meta + `> 检索 ${v.title}(${v.url}) ...\n`,
-                      ""
-                   );
-                   partReasoning += searchText;
-                } else if (
-                  type == "image" &&
-                  _.isArray(image) &&
-                  part.status == "finish"
-                ) {
-                  const imageText = image.reduce(
-                    (imgs: string, v: any) =>
-                      imgs +
-                      (/^(http|https):\/\//.test(v.image_url)
-                        ? `![图像](${v.image_url || ""})`
-                        : ""),
-                    ""
-                  ) + "\n";
-                  partText += imageText;
-                } else if (type == "code") {
-                   // 代码块处理：始终包裹
-                   partText += "```python\n" + code + (part.status == "finish" ? "\n```\n" : "");
-                } else if (
-                  type == "execution_output" &&
-                  _.isString(innerContent) &&
-                  part.status == "finish"
-                ) {
-                  partText += innerContent + "\n";
-                }
-            });
-
-            if (partText) {
-              fullText += (fullText.length > 0 ? "\n" : "") + partText;
+            if (type == "text") {
+              if (thinking) {
+                innerStr += "</think>\n\n";
+                textOffset += thinkingText.length + 8;
+                thinking = false;
+              }
+              if (toolCall) {
+                innerStr += "\n";
+                textOffset++;
+                toolCall = false;
+              }
+              if (partStatus == "finish") textChunkLength = text.length;
+              return innerStr + text;
+            } else if (type == "think" && isThinkModel && !isSilentModel) {
+              if (!thinking) {
+                innerStr += "<think>\n";
+                textOffset += 7;
+                thinking = true;
+              }
+              if (toolCall) {
+                innerStr += "\n";
+                textOffset++;
+                toolCall = false;
+              }
+              if (partStatus == "finish") textChunkLength = think.length;
+              thinkingText += think.substring(thinkingText.length, think.length);
+              return innerStr + thinkingText;
+            } else if (type == "think" && !isSilentModel) {
+              if (toolCall) {
+                innerStr += "\n";
+                textOffset++;
+                toolCall = false;
+              }
+              if (partStatus == "finish") textChunkLength = thinkingText.length;
+              thinkingText += think;
+              return innerStr + thinkingText;
+            } else if (type == "quote_result" && status == "finish" && meta_data && _.isArray(meta_data.metadata_list) && !isSilentModel) {
+              const searchText = meta_data.metadata_list.reduce((meta, v) => meta + `检索 ${v.title}(${v.url}) ...\n`, "");
+              textOffset += searchText.length;
+              toolCall = true;
+              return innerStr + searchText;
+            } else if (type == "image" && _.isArray(image) && status == "finish") {
+              const imageText = image.reduce((imgs, v) => imgs + (/^(http|https):\/\//.test(v.image_url) ? `![图像](${v.image_url || ""})` : ""), "") + "\n";
+              textOffset += imageText.length;
+              toolCall = true;
+              return innerStr + imageText;
+            } else if (type == "code" && status == "init") {
+              let codeHead = "";
+              if (!codeGenerating) {
+                codeGenerating = true;
+                codeHead = "```python\n";
+              }
+              const chunk = code.substring(codeTemp.length, code.length);
+              codeTemp += chunk;
+              textOffset += codeHead.length + chunk.length;
+              return innerStr + codeHead + chunk;
+            } else if (type == "code" && status == "finish" && codeGenerating) {
+              codeGenerating = false;
+              codeTemp = "";
+              textOffset += 6;
+              return innerStr + "\n```\n";
+            } else if (type == "execution_output" && _.isString(valueContent) && status == "finish" && lastExecutionOutput != valueContent) {
+              lastExecutionOutput = valueContent;
+              textOffset += valueContent.length + 1;
+              return innerStr + valueContent + "\n";
             }
-            if (partReasoning) {
-              fullReasoning += (fullReasoning.length > 0 ? "\n" : "") + partReasoning;
-            }
-        });
-
-        // 计算思考内容增量
-        const reasoningChunk = fullReasoning.substring(sentReasoning.length);
-        if (reasoningChunk) {
-          sentReasoning += reasoningChunk;
-          const data = `data: ${JSON.stringify({
-            id: result.conversation_id,
-            model: MODEL_NAME,
-            object: "chat.completion.chunk",
-            choices: [
-              { index: 0, delta: { reasoning_content: reasoningChunk }, finish_reason: null },
-            ],
-            created,
-          })}\n\n`;
-          !transStream.closed && transStream.write(data);
-        }
-
-        // 计算内容增量
-        const chunk = fullText.substring(sentContent.length);
+            return innerStr;
+          }, "");
+          return str + partText;
+        }, "");
+        const chunk = text.substring(content.length - textOffset, text.length);
         if (chunk) {
-          sentContent += chunk;
+          content += chunk;
           const data = `data: ${JSON.stringify({
             id: result.conversation_id,
             model: MODEL_NAME,
@@ -1468,7 +1400,7 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
         })}\n\n`;
         !transStream.closed && transStream.write(data);
         !transStream.closed && transStream.end("data: [DONE]\n\n");
-        sentContent = "";
+        content = "";
         endCallback && endCallback(result.conversation_id);
       }
     } catch (err) {
@@ -1486,7 +1418,10 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
   );
   stream.once(
     "close",
-    () => !transStream.closed && transStream.end("data: [DONE]\n\n")
+    () => {
+      parser.feed(decoder.decode());
+      if (!transStream.closed) transStream.end("data: [DONE]\n\n");
+    }
   );
   return transStream;
 }
