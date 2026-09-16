@@ -26,6 +26,7 @@
 - 未发现破坏性 API 变更；仅调整流式响应内部解析策略。
 - 多轮复测覆盖普通模型、推理模型和不同长文本主题，均正常完成 SSE 并发送 `[DONE]`；推理模型的一次请求从指定首句开始输出。
 - Dockerfile 已切换为使用 pnpm lockfile 构建，并直接启动已构建的 `dist/index.js`。
+- Docker smoke test 发现原 Alpine 运行阶段无法加载构建阶段安装的 glibc 版 `sharp`；运行阶段已改为与构建阶段一致的 Debian Node 镜像，避免跨 libc 复制原生依赖。
 
 已完成修复后的真实长文本回归验证；后续如需扩大覆盖范围，可补充固定上游 SSE fixture 的自动化测试。
 

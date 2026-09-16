@@ -6,7 +6,7 @@ COPY . /app
 
 RUN corepack enable && pnpm install --frozen-lockfile && pnpm build
 
-FROM node:lts-alpine
+FROM node:lts
 
 COPY --from=BUILD_IMAGE /app/configs /app/configs
 COPY --from=BUILD_IMAGE /app/package.json /app/package.json
