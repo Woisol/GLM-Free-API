@@ -36,6 +36,7 @@
 - 已增加同一逻辑段字段合并：较长前缀快照覆盖较短值，非前缀值追加，较短回退值忽略；第二组请求按要求等待超过 30 秒后发送，但 token 再次被上游判定过期，未能完成对照回归。
 - 延迟 60 秒的两组真实请求均通过：第一组客户端重建得到正文 4015 字符、reasoning 1984 字符；第二组正文 4930 字符、reasoning 4727 字符；两组均有正确指定首句、`finish_reason: stop` 和 `[DONE]`。
 - Docker 1.0.4 构建排查：pnpm 9 需要 workspace `packages` 字段，已补充；构建阶段固定 pnpm 9.15.4 并使用 frozen lockfile。当前环境 Docker 默认网络 DNS 偶发 `EAI_AGAIN`，使用 `docker build --network=host` 构建成功，容器 `/ping` smoke test 通过。
+- `woisol/glm-free-api-fix:1.0.4` 和 `latest` 已本地生成同一镜像 digest；Docker Hub registry 当前连接超时，重试及 IPv4 检查均未完成推送，未宣称发布成功。
 
 已完成修复后的真实长文本回归验证；后续如需扩大覆盖范围，可补充固定上游 SSE fixture 的自动化测试。
 
