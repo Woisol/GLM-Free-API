@@ -27,6 +27,7 @@
 - 多轮复测覆盖普通模型、推理模型和不同长文本主题，均正常完成 SSE 并发送 `[DONE]`；推理模型的一次请求从指定首句开始输出。
 - Dockerfile 已切换为使用 pnpm lockfile 构建，并直接启动已构建的 `dist/index.js`。
 - Docker smoke test 发现原 Alpine 运行阶段无法加载构建阶段安装的 glibc 版 `sharp`；运行阶段已改为与构建阶段一致的 Debian Node 镜像，避免跨 libc 复制原生依赖。
+- 镜像 `akashrajpuroh1t/glm-free-api-fix:1.0.3` 和 `latest` 已本地构建，容器 `/ping` smoke test 通过；推送 Docker Hub 时 registry 连接被当前网络重置，尚未能确认远端发布成功。
 
 已完成修复后的真实长文本回归验证；后续如需扩大覆盖范围，可补充固定上游 SSE fixture 的自动化测试。
 
