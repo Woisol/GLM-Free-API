@@ -1254,6 +1254,32 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
   const cachedParts: any[] = [];
   const searchMap = new Map<string, any>();
 
+  const mergePart = (previous: any, next: any) => {
+    if (!previous || !_.isArray(previous.content) || !_.isArray(next.content)) {
+      return next;
+    }
+
+    const content = next.content.map((value: any, index: number) => {
+      const oldValue = previous.content[index];
+      if (!oldValue || oldValue.type !== value.type) return value;
+
+      const merged = { ...value };
+      for (const field of ["text", "think", "code"]) {
+        if (!_.isString(value[field]) || !_.isString(oldValue[field])) continue;
+        if (value[field].startsWith(oldValue[field])) {
+          merged[field] = value[field];
+        } else if (oldValue[field].startsWith(value[field])) {
+          merged[field] = oldValue[field];
+        } else {
+          merged[field] = oldValue[field] + value[field];
+        }
+      }
+      return merged;
+    });
+
+    return { ...next, content };
+  };
+
   !transStream.closed &&
     transStream.write(
       `data: ${JSON.stringify({
@@ -1285,9 +1311,13 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
           });
 
           const partTypes = new Set(part.content.map((value) => value.type));
-          const existingIndex = cachedParts.findIndex((cached) => cached.logic_id === part.logic_id);
+          const existingIndex = cachedParts.findIndex((cached) =>
+            cached.logic_id === part.logic_id &&
+            _.isArray(cached.content) &&
+            cached.content.some((value) => partTypes.has(value.type))
+          );
           if (existingIndex !== -1) {
-            cachedParts[existingIndex] = part;
+            cachedParts[existingIndex] = mergePart(cachedParts[existingIndex], part);
             return;
           }
 
@@ -1299,7 +1329,7 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
             const cachedTypes = new Set(cached.content.map((value) => value.type));
             return [...partTypes].some((type) => cachedTypes.has(type));
           });
-          if (activeIndex !== -1) cachedParts[activeIndex] = part;
+          if (activeIndex !== -1) cachedParts[activeIndex] = mergePart(cachedParts[activeIndex], part);
           else cachedParts.push(part);
         });
 
