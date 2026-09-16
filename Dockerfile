@@ -1,4 +1,4 @@
-FROM node:lts AS BUILD_IMAGE
+FROM node:lts AS build
 
 WORKDIR /app
 
@@ -8,11 +8,11 @@ RUN corepack enable && pnpm install --frozen-lockfile && pnpm build
 
 FROM node:lts
 
-COPY --from=BUILD_IMAGE /app/configs /app/configs
-COPY --from=BUILD_IMAGE /app/package.json /app/package.json
-COPY --from=BUILD_IMAGE /app/dist /app/dist
-COPY --from=BUILD_IMAGE /app/public /app/public
-COPY --from=BUILD_IMAGE /app/node_modules /app/node_modules
+COPY --from=build /app/configs /app/configs
+COPY --from=build /app/package.json /app/package.json
+COPY --from=build /app/dist /app/dist
+COPY --from=build /app/public /app/public
+COPY --from=build /app/node_modules /app/node_modules
 
 WORKDIR /app
 

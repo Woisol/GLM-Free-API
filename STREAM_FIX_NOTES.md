@@ -28,6 +28,10 @@
 - Dockerfile 已切换为使用 pnpm lockfile 构建，并直接启动已构建的 `dist/index.js`。
 - Docker smoke test 发现原 Alpine 运行阶段无法加载构建阶段安装的 glibc 版 `sharp`；运行阶段已改为与构建阶段一致的 Debian Node 镜像，避免跨 libc 复制原生依赖。
 - 镜像 `akashrajpuroh1t/glm-free-api-fix:1.0.3` 和 `latest` 已本地构建，容器 `/ping` smoke test 通过；推送 Docker Hub 时 registry 连接被当前网络重置，尚未能确认远端发布成功。
+- 本轮新增目标：恢复 `reasoning_content` 和搜索信息，同时保证 think 结束后最终正文独立从首字符增量输出，避免复用 reasoning 长度造成正文截断。
+- 本轮提供的 refresh token 在复测时已被上游判定为过期，因此无法继续进行新的真实联网回归；已避免在刷新日志中记录 token 明文。
+- 代码级检查：流式缓存现在从 `cachedParts` 重建，而不是只处理当前事件；think、tool/search、正文分别累计并分别输出，最终正文不再使用 think 的长度或偏移量。
+- 代码级风险边界：若上游在已发送正文后重新改写更早内容，服务端不会回溯已发送 SSE；正常的累积快照会保持前缀并只发送新增后缀。
 
 已完成修复后的真实长文本回归验证；后续如需扩大覆盖范围，可补充固定上游 SSE fixture 的自动化测试。
 

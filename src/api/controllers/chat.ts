@@ -115,7 +115,7 @@ async function requestToken(refreshToken: string) {
       accessTokenRequestQueueMap[refreshToken].push(resolve)
     );
   accessTokenRequestQueueMap[refreshToken] = [];
-  logger.info(`Refresh token: ${refreshToken}`);
+  logger.info("Refreshing access token");
   const result = await (async () => {
     // 生成sign
     const sign = await generateSign();
@@ -1249,16 +1249,10 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
   // 创建转换流
   const transStream = new PassThrough();
   const isSilentModel = model.indexOf('silent') != -1;
-  const isThinkModel = model.indexOf('think') != -1 || model.indexOf('zero') != -1;
-  let content = "";
-  let thinking = false;
-  let toolCall = false;
-  let codeGenerating = false;
-  let textChunkLength = 0;
-  let thinkingText = "";
-  let codeTemp = "";
-  let lastExecutionOutput = "";
-  let textOffset = 0;
+  let sentContent = "";
+  let sentReasoning = "";
+  const cachedParts: any[] = [];
+  const searchMap = new Map<string, any>();
 
   !transStream.closed &&
     transStream.write(
@@ -1284,90 +1278,88 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
       if (_.isError(result))
         throw new Error(`Stream response invalid: ${event.data}`);
       if (result.status != "finish" && result.status != "intervene") {
-        const text = result.parts.reduce((str, part) => {
-          const { status, content: partContent, meta_data } = part;
-          if (!_.isArray(partContent)) return str;
-          const partText = partContent.reduce((innerStr, value) => {
-            const { status: partStatus, type, text, think, image, code, content: valueContent } = value;
-            if (partStatus == "init" && textChunkLength > 0) {
-              textOffset += textChunkLength + 1;
-              textChunkLength = 0;
-              innerStr += "\n";
+        result.parts?.forEach((part) => {
+          if (!_.isArray(part.content)) return;
+          part.meta_data?.tool_result_extra?.search_results?.forEach((search) => {
+            if (search.match_key) searchMap.set(search.match_key, search);
+          });
+
+          const partTypes = new Set(part.content.map((value) => value.type));
+          const existingIndex = cachedParts.findIndex((cached) => cached.logic_id === part.logic_id);
+          if (existingIndex !== -1) {
+            cachedParts[existingIndex] = part;
+            return;
+          }
+
+          // A few upstream responses rotate logic_id while updating the same
+          // unfinished think/text block. Replace that active block, but keep
+          // finished blocks so the final answer cannot lose its prefix.
+          const activeIndex = cachedParts.findIndex((cached) => {
+            if (cached.status === "finish" || !_.isArray(cached.content)) return false;
+            const cachedTypes = new Set(cached.content.map((value) => value.type));
+            return [...partTypes].some((type) => cachedTypes.has(type));
+          });
+          if (activeIndex !== -1) cachedParts[activeIndex] = part;
+          else cachedParts.push(part);
+        });
+
+        let fullText = "";
+        let fullReasoning = "";
+        cachedParts.forEach((part) => {
+          if (!_.isArray(part.content)) return;
+          part.content.forEach((value) => {
+            const { type, text, think, image, code, content: innerContent } = value;
+            if (type == "text" && _.isString(text)) {
+              // Do not rewrite already-sent citation markers when search
+              // metadata arrives later; that would invalidate the prefix
+              // comparison and drop the rest of the answer.
+              fullText += text;
+            } else if (type == "think" && _.isString(think) && !isSilentModel) {
+              fullReasoning += think;
+            } else if (type == "tool_result" && !isSilentModel) {
+              const searches = part.meta_data?.tool_result_extra?.search_results;
+              if (_.isArray(searches)) {
+                fullReasoning += searches.reduce((text, search) =>
+                  text + `> 检索 ${search.title}(${search.url}) ...\n`, "");
+              }
+            } else if (type == "quote_result" && part.status == "finish" && !isSilentModel) {
+              const metadata = part.meta_data?.metadata_list;
+              if (_.isArray(metadata)) {
+                fullReasoning += metadata.reduce((text, search) =>
+                  text + `> 检索 ${search.title}(${search.url}) ...\n`, "");
+              }
+            } else if (type == "image" && _.isArray(image) && part.status == "finish") {
+              fullText += image.reduce((text, item) =>
+                text + (/^(http|https):\/\//.test(item.image_url) ? `![图像](${item.image_url || ""})` : ""), "") + "\n";
+            } else if (type == "code" && _.isString(code)) {
+              fullText += `\`\`\`python\n${code}${part.status == "finish" ? "\n\`\`\`\n" : ""}`;
+            } else if (type == "execution_output" && _.isString(innerContent) && part.status == "finish") {
+              fullText += innerContent + "\n";
             }
-            if (type == "text") {
-              if (thinking) {
-                innerStr += "</think>\n\n";
-                textOffset += thinkingText.length + 8;
-                thinking = false;
-              }
-              if (toolCall) {
-                innerStr += "\n";
-                textOffset++;
-                toolCall = false;
-              }
-              if (partStatus == "finish") textChunkLength = text.length;
-              return innerStr + text;
-            } else if (type == "think" && isThinkModel && !isSilentModel) {
-              if (!thinking) {
-                innerStr += "<think>\n";
-                textOffset += 7;
-                thinking = true;
-              }
-              if (toolCall) {
-                innerStr += "\n";
-                textOffset++;
-                toolCall = false;
-              }
-              if (partStatus == "finish") textChunkLength = think.length;
-              thinkingText += think.substring(thinkingText.length, think.length);
-              return innerStr + thinkingText;
-            } else if (type == "think" && !isSilentModel) {
-              if (toolCall) {
-                innerStr += "\n";
-                textOffset++;
-                toolCall = false;
-              }
-              if (partStatus == "finish") textChunkLength = thinkingText.length;
-              thinkingText += think;
-              return innerStr + thinkingText;
-            } else if (type == "quote_result" && status == "finish" && meta_data && _.isArray(meta_data.metadata_list) && !isSilentModel) {
-              const searchText = meta_data.metadata_list.reduce((meta, v) => meta + `检索 ${v.title}(${v.url}) ...\n`, "");
-              textOffset += searchText.length;
-              toolCall = true;
-              return innerStr + searchText;
-            } else if (type == "image" && _.isArray(image) && status == "finish") {
-              const imageText = image.reduce((imgs, v) => imgs + (/^(http|https):\/\//.test(v.image_url) ? `![图像](${v.image_url || ""})` : ""), "") + "\n";
-              textOffset += imageText.length;
-              toolCall = true;
-              return innerStr + imageText;
-            } else if (type == "code" && status == "init") {
-              let codeHead = "";
-              if (!codeGenerating) {
-                codeGenerating = true;
-                codeHead = "```python\n";
-              }
-              const chunk = code.substring(codeTemp.length, code.length);
-              codeTemp += chunk;
-              textOffset += codeHead.length + chunk.length;
-              return innerStr + codeHead + chunk;
-            } else if (type == "code" && status == "finish" && codeGenerating) {
-              codeGenerating = false;
-              codeTemp = "";
-              textOffset += 6;
-              return innerStr + "\n```\n";
-            } else if (type == "execution_output" && _.isString(valueContent) && status == "finish" && lastExecutionOutput != valueContent) {
-              lastExecutionOutput = valueContent;
-              textOffset += valueContent.length + 1;
-              return innerStr + valueContent + "\n";
-            }
-            return innerStr;
-          }, "");
-          return str + partText;
-        }, "");
-        const chunk = text.substring(content.length - textOffset, text.length);
-        if (chunk) {
-          content += chunk;
-          const data = `data: ${JSON.stringify({
+          });
+        });
+
+        // Each upstream value is a cumulative snapshot. Only emit a suffix
+        // while the snapshot still contains everything already sent.
+        if (fullReasoning.startsWith(sentReasoning)) {
+          const reasoningChunk = fullReasoning.substring(sentReasoning.length);
+          if (reasoningChunk) {
+            sentReasoning += reasoningChunk;
+            const data = `data: ${JSON.stringify({
+              id: result.conversation_id,
+              model: MODEL_NAME,
+              object: "chat.completion.chunk",
+              choices: [{ index: 0, delta: { reasoning_content: reasoningChunk }, finish_reason: null }],
+              created,
+            })}\n\n`;
+            !transStream.closed && transStream.write(data);
+          }
+        }
+        if (fullText.startsWith(sentContent)) {
+          const chunk = fullText.substring(sentContent.length);
+          if (chunk) {
+            sentContent += chunk;
+            const data = `data: ${JSON.stringify({
             id: result.conversation_id,
             model: MODEL_NAME,
             object: "chat.completion.chunk",
@@ -1376,7 +1368,8 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
             ],
             created,
           })}\n\n`;
-          !transStream.closed && transStream.write(data);
+            !transStream.closed && transStream.write(data);
+          }
         }
       } else {
         const data = `data: ${JSON.stringify({
@@ -1400,7 +1393,8 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
         })}\n\n`;
         !transStream.closed && transStream.write(data);
         !transStream.closed && transStream.end("data: [DONE]\n\n");
-        content = "";
+        sentContent = "";
+        sentReasoning = "";
         endCallback && endCallback(result.conversation_id);
       }
     } catch (err) {
