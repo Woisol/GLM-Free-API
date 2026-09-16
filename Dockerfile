@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . /app
 
-RUN yarn install --registry https://registry.npmmirror.com/ --ignore-engines && yarn run build
+RUN corepack enable && pnpm install --frozen-lockfile && pnpm build
 
 FROM node:lts-alpine
 
@@ -18,4 +18,4 @@ WORKDIR /app
 
 EXPOSE 8000
 
-CMD ["npm", "start"]
+CMD ["node", "--enable-source-maps", "dist/index.js"]
