@@ -2,9 +2,13 @@ FROM node:lts AS build
 
 WORKDIR /app
 
-COPY . /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN corepack enable && pnpm install --frozen-lockfile && pnpm build
+RUN npm install --global pnpm@9.15.4 --registry=https://registry.npmjs.org && pnpm install --frozen-lockfile
+
+COPY . .
+
+RUN pnpm build
 
 FROM node:lts
 
