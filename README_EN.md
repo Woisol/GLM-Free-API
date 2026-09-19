@@ -6,7 +6,7 @@
 
 Supports GLM-4-Plus high-speed streaming output, multi-round conversations, agent conversations, contemplative models, Zero thinking reasoning models, video generation, AI drawing, web search, long document interpretation, image parsing, zero-configuration deployment, multi-token support, and automatic session trace cleanup.
 
-This project is modified from [https://github.com/LLM-Red-Team/glm-free-api](https://github.com/LLM-Red-Team/glm-free-api), thanks to the original contributor!
+This project is further modified from [xiaoY233/GLM-Free-API](https://github.com/xiaoY233/GLM-Free-API), whose upstream is [LLM-Red-Team/glm-free-api](https://github.com/LLM-Red-Team/glm-free-api). Thanks to all the contributors!
 Important note: The original project contained malicious code due to a supply chain attack. It is strongly recommended not to continue using it.
 
 Reasons for modification:
@@ -15,15 +15,33 @@ Reasons for modification:
 
 ## Update Notes
 
-1. Updated models.ts model list to support the latest models: glm-4.5, glm-4.5-x, glm-4.5-air, glm-4.6
+1. Updated models.ts model list to support the latest models: glm-4.7, glm-4.6v, glm-4.6
 
-2. Repackaged new version of Docker image: `akashrajpuroh1t/glm-free-api-fix:latest`
+2. Fixed streaming output issues such as missing first segment of long text and lost reasoning/search sections
 
-3. Fixed malicious code issues in the source code and repackaged. The original project contained obfuscated code at the end of the `src/api/chat.js` file
+3. Fixed malicious code issues in the source code. The original project contained obfuscated code at the end of the `src/api/chat.js` file
+
+4. Repackaged new version of Docker image: `woisol/glm-free-api-fix:latest`
+
+5. Added a GitHub Actions workflow to automatically build and publish the image to Docker Hub on push
 
 > PS: Model names are not actually very useful, just for convenience and aesthetics. The actual model used in online Chat calls is whatever model is called. Model names can be filled in arbitrarily.
 
 ### Version Notes
+
+- v1.0.5 (2026-09-19)
+    - Removed internal search tokens `【turnNsearchN】` from both sync and streaming output, while keeping search result summaries and normal bracketed text
+    - Added a GitHub Actions workflow to automatically build and publish the image to Docker Hub on push
+
+- v1.0.4 (2026-09-16)
+    - Fixed streaming output of `reasoning_content` reasoning and search result sections
+    - Safely merged mixed snapshot/incremental formats of the same logic segment to avoid premature truncation of the main content
+    - Reproducible Docker build: added the pnpm workspace `packages` field, pinned pnpm 9.15.4 and used the frozen lockfile
+
+- v1.0.3 (2026-09-16)
+    - Fixed missing first segment of long-text streaming responses by restoring incremental output based on `partStatus` and sent offsets
+    - Flushed `TextDecoder` when the upstream stream closes to avoid losing the last incomplete UTF-8 sequence
+    - Switched the Docker build to the pnpm lockfile and the runtime stage to a Debian Node image for glibc `sharp` compatibility
 
 - v1.0.2 (2025-02-05)
     - Updated model list, added GLM-4.7, GLM-4.6v, GLM-4.6
@@ -124,7 +142,7 @@ Please prepare a server with a public IP and open port 8000.
 Pull the image and start the service
 
 ```shell
-docker run -it -d --init --name glm-free-api -p 8000:8000 -e TZ=Asia/Shanghai akashrajpuroh1t/glm-free-api-fix
+docker run -it -d --init --name glm-free-api -p 8000:8000 -e TZ=Asia/Shanghai woisol/glm-free-api-fix
 ```
 
 View service real-time logs
@@ -153,7 +171,7 @@ version: '3'
 services:
   glm-free-api:
     container_name: glm-free-api
-    image: akashrajpuroh1t/glm-free-api-fix:latest
+    image: woisol/glm-free-api-fix:latest
     restart: always
     ports:
       - "8000:8000"

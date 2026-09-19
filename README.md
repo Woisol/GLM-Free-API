@@ -4,11 +4,9 @@
 
 <span>[ 中文 | <a href="README_EN.md">English</a> ]</span>
 
-> ✨✨ 新项目[https://github.com/xiaoY233/Chat2API](https://github.com/xiaoY233/Chat2API)已经上线，后续统一进行更新维护，此项目不再更新了
-
 支持GLM-4-Plus高速流式输出、支持多轮对话、支持智能体对话、支持沉思模型、支持Zero思考推理模型、支持视频生成、支持AI绘图、支持联网搜索、支持长文档解读、支持图像解析，零配置部署，多路token支持，自动清理会话痕迹。
 
-本项目由[https://github.com/LLM-Red-Team/glm-free-api](https://github.com/LLM-Red-Team/glm-free-api)修改而来,感谢大佬的贡献!
+本项目由 [xiaoY233/GLM-Free-API](https://github.com/xiaoY233/GLM-Free-API) 继续修改而来，其上游为 [LLM-Red-Team/glm-free-api](https://github.com/LLM-Red-Team/glm-free-api)，感谢各位大佬的贡献!
 重要提示：原项目由于供应链攻击，提交的代码内包含恶意代码，强烈建议不再继续使用。
 
 修改原因：
@@ -17,15 +15,29 @@
 
 ## 更新说明
 
-1. 更新models.ts 模型列表，支持glm-4.5、glm-4.5-x、glm-4.5-air、glm-4.6等最新模型
-
-3. 重新打包新版本的docker镜像，`akashrajpuroh1t/glm-free-api-fix:latest`
-
-4. 已修复源码中恶意代码问题，并重新打包，原项目包含混淆代码在`src/api/chat.js`文件末尾处
+1. 更新 models.ts 模型列表，支持 glm-4.7、glm-4.6v、glm-4.6 等最新模型
+2. 修复流式响应长文本首段丢失、思考过程与搜索结果分段丢失等输出问题
+3. 已修复源码中恶意代码问题，原项目包含混淆代码在 `src/api/chat.js` 文件末尾处
+4. 重新打包新版本的 Docker 镜像，`woisol/glm-free-api-fix:latest`
+5. 新增 GitHub Actions 工作流，push 时自动构建并发布镜像到 Docker Hub
 
 > PS：模型名称实际上并没啥用，只是方便和好看，实际上线上Chat调用是啥模型，就用的啥模型，模型名称随便填都可以。
 
 ### 版本说明
+
+- v1.0.5 (2026-09-19)
+    - 同步与流式输出统一移除正文中的内部搜索标识 `【turn数字search数字】`，保留搜索结果摘要和普通方括号文本
+    - 新增 GitHub Actions 工作流，push 时自动构建并发布镜像到 Docker Hub
+
+- v1.0.4 (2026-09-16)
+    - 修复 `reasoning_content` 思考过程与搜索结果分段的流式输出
+    - 安全合并混合快照/增量格式的同一逻辑段，避免正文被过早截断
+    - Docker 构建可复现：补充 pnpm workspace `packages` 字段，固定 pnpm 9.15.4 并使用 frozen lockfile
+
+- v1.0.3 (2026-09-16)
+    - 修复长文本流式响应首段丢失，恢复按 `partStatus` 与已发送偏移量计算增量的输出逻辑
+    - 上游流关闭时刷新 `TextDecoder`，避免最后一个不完整 UTF-8 序列丢失
+    - Docker 构建改用 pnpm lockfile，运行阶段改用 Debian Node 镜像以兼容 glibc 版 `sharp`
 
 - v1.0.2 (2025-02-05)
     - 更新模型列表，添加 GLM-4.7、GLM-4.6v、GLM-4.6
@@ -44,7 +56,7 @@
 - v1.0.0-fix (2025-11-24)
     - 修改默认首页样式，添加接入方式和示例代码
     - 去除原项目中包含的恶意代码
-  
+
 ## 免责声明
 
 **逆向API是不稳定的，建议前往智谱AI官方 https://open.bigmodel.cn/ 付费使用API，避免封禁的风险。**
@@ -127,7 +139,7 @@
 拉取镜像并启动服务
 
 ```shell
-docker run -it -d --init --name glm-free-api -p 8000:8000 -e TZ=Asia/Shanghai akashrajpuroh1t/glm-free-api-fix
+docker run -it -d --init --name glm-free-api -p 8000:8000 -e TZ=Asia/Shanghai woisol/glm-free-api-fix
 ```
 
 查看服务实时日志
@@ -156,7 +168,7 @@ version: '3'
 services:
   glm-free-api:
     container_name: glm-free-api
-    image: akashrajpuroh1t/glm-free-api-fix:latest
+    image: woisol/glm-free-api-fix:latest
     restart: always
     ports:
       - "8000:8000"
@@ -169,7 +181,7 @@ services:
 目前支持：
 
 1. 与OpenAI兼容的 `/v1/chat/completions` 接口
-2. 与Google Gemini兼容的 `/v1beta/models/:model:generateContent` 接口  
+2. 与Google Gemini兼容的 `/v1beta/models/:model:generateContent` 接口
 3. 与Anthropic Claude兼容的 `/v1/messages` 接口
 
 可自行使用与openai、gemini-cli、claude-code或其他兼容的客户端接入接口，或者使用 [dify](https://dify.ai/) 等线上服务接入使用。
