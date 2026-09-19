@@ -26,6 +26,29 @@ const MAX_RETRY_COUNT = 3;
 // 重试延迟
 const RETRY_DELAY = 5000;
 
+// Remove ChatGLM's internal search citation markers from user-facing text.
+const SEARCH_MARKER_PATTERN = /【turn\d+search\d+】/gi;
+
+function removeSearchMarkers(text: string) {
+  return text.replace(SEARCH_MARKER_PATTERN, "");
+}
+
+// A marker can be split across several upstream snapshots. Keep a possible
+// marker prefix out of the response until the next snapshot disambiguates it.
+function getSafeStreamChunk(fullText: string, sentText: string) {
+  if (!fullText.startsWith(sentText)) return "";
+
+  const chunk = fullText.substring(sentText.length);
+  const markerStart = chunk.lastIndexOf("【");
+  if (markerStart === -1) return chunk;
+
+  const possibleMarker = chunk.substring(markerStart);
+  if (/^【turn\d*search\d*$/i.test(possibleMarker)) {
+    return chunk.substring(0, markerStart);
+  }
+  return chunk;
+}
+
 // User-Agent列表
 const USER_AGENTS = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -1087,29 +1110,6 @@ async function receiveStream(model: string, stream: any): Promise<any> {
               cachedParts.push(...result.parts);
             }
 
-            // 1. Collect Search Results
-            const searchMap = new Map<string, any>();
-            cachedParts.forEach((part) => {
-                if (!part.content || !_.isArray(part.content)) return;
-                const { meta_data } = part;
-                part.content.forEach((item: any) => {
-                     if (
-                          item.type == "tool_result" &&
-                          meta_data?.tool_result_extra?.search_results
-                        ) {
-                           meta_data.tool_result_extra.search_results.forEach((res: any) => {
-                               if (res.match_key) {
-                                   searchMap.set(res.match_key, res);
-                               }
-                           });
-                        }
-                });
-            });
-
-            // 2. Prepare for renumbering
-            const keyToIdMap = new Map<string, number>();
-            let counter = 1;
-
             // 全量重建所有 parts 的文本和思考内容
             let fullText = "";
             let fullReasoning = "";
@@ -1133,25 +1133,7 @@ async function receiveStream(model: string, stream: any): Promise<any> {
                     } = value;
 
                     if (type == "text") {
-                        let txt = text;
-                        if (searchMap.size > 0) {
-                             // Match any turnXsearchY pattern, with optional brackets
-                             txt = txt.replace(/【?(turn\d+[a-zA-Z]+\d+)】?/g, (match: string, key: string) => {
-                                 const searchInfo = searchMap.get(key);
-                                 if (!searchInfo) {
-                                     return match; // Keep original if not found
-                                 }
-
-                                 // Assign new ID if not exists
-                                 if (!keyToIdMap.has(key)) {
-                                     keyToIdMap.set(key, counter++);
-                                 }
-                                 const newId = keyToIdMap.get(key);
-
-                                 return ` [${newId}](${searchInfo.url})`;
-                             });
-                        }
-                        partText += txt;
+                        partText += removeSearchMarkers(text);
                     } else if (type == "think" && !isSilentModel) {
                         partReasoning += think;
                     } else if (
@@ -1216,7 +1198,7 @@ async function receiveStream(model: string, stream: any): Promise<any> {
             (data.choices[0].message as any).reasoning_content = fullReasoning || null;
         } else {
           data.choices[0].message.content =
-            data.choices[0].message.content.replace(
+            removeSearchMarkers(data.choices[0].message.content).replace(
               /【\d+†(来源|源|source)】/g,
               ""
             );
@@ -1252,7 +1234,6 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
   let sentContent = "";
   let sentReasoning = "";
   const cachedParts: any[] = [];
-  const searchMap = new Map<string, any>();
 
   const mergePart = (previous: any, next: any) => {
     if (!previous || !_.isArray(previous.content) || !_.isArray(next.content)) {
@@ -1306,10 +1287,6 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
       if (result.status != "finish" && result.status != "intervene") {
         result.parts?.forEach((part) => {
           if (!_.isArray(part.content)) return;
-          part.meta_data?.tool_result_extra?.search_results?.forEach((search) => {
-            if (search.match_key) searchMap.set(search.match_key, search);
-          });
-
           const partTypes = new Set(part.content.map((value) => value.type));
           const existingIndex = cachedParts.findIndex((cached) =>
             cached.logic_id === part.logic_id &&
@@ -1343,7 +1320,7 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
               // Do not rewrite already-sent citation markers when search
               // metadata arrives later; that would invalidate the prefix
               // comparison and drop the rest of the answer.
-              fullText += text;
+              fullText += removeSearchMarkers(text);
             } else if (type == "think" && _.isString(think) && !isSilentModel) {
               fullReasoning += think;
             } else if (type == "tool_result" && !isSilentModel) {
@@ -1386,7 +1363,7 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
           }
         }
         if (fullText.startsWith(sentContent)) {
-          const chunk = fullText.substring(sentContent.length);
+          const chunk = getSafeStreamChunk(fullText, sentContent);
           if (chunk) {
             sentContent += chunk;
             const data = `data: ${JSON.stringify({
