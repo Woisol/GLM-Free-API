@@ -27,26 +27,26 @@ const MAX_RETRY_COUNT = 3;
 const RETRY_DELAY = 5000;
 
 // Remove ChatGLM's internal search citation markers from user-facing text.
-const SEARCH_MARKER_PATTERN = /【turn\d+search\d+】/gi;
+const SEARCH_MARKER_PATTERN = /【turn\d+[a-z]+\d+】/gi;
 
 function removeSearchMarkers(text: string) {
   return text.replace(SEARCH_MARKER_PATTERN, "");
 }
 
-// A marker can be split across several upstream snapshots. Keep a possible
-// marker prefix out of the response until the next snapshot disambiguates it.
-function getSafeStreamChunk(fullText: string, sentText: string) {
-  if (!fullText.startsWith(sentText)) return "";
+// Return only the part that is safe to emit. A complete marker is removed;
+// an incomplete marker is held until a later snapshot completes or disproves it.
+function getSafeStreamText(text: string) {
+  let safeText = removeSearchMarkers(text);
+  const markerStart = safeText.lastIndexOf("【");
+  if (markerStart === -1) return safeText;
 
-  const chunk = fullText.substring(sentText.length);
-  const markerStart = chunk.lastIndexOf("【");
-  if (markerStart === -1) return chunk;
-
-  const possibleMarker = chunk.substring(markerStart);
-  if (/^【turn\d*search\d*$/i.test(possibleMarker)) {
-    return chunk.substring(0, markerStart);
+  const possibleMarker = safeText.substring(markerStart);
+  // Keep every valid prefix, including the bare "【turn", buffered. Sending
+  // it would make the later cleaned snapshot shorter than sentContent.
+  if (/^【turn(?:\d*[a-z]*\d*)?$/i.test(possibleMarker)) {
+    safeText = safeText.substring(0, markerStart);
   }
-  return chunk;
+  return safeText;
 }
 
 // User-Agent列表
@@ -1320,9 +1320,9 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
               // Do not rewrite already-sent citation markers when search
               // metadata arrives later; that would invalidate the prefix
               // comparison and drop the rest of the answer.
-              fullText += removeSearchMarkers(text);
+              fullText += getSafeStreamText(text);
             } else if (type == "think" && _.isString(think) && !isSilentModel) {
-              fullReasoning += think;
+              fullReasoning += getSafeStreamText(think);
             } else if (type == "tool_result" && !isSilentModel) {
               const searches = part.meta_data?.tool_result_extra?.search_results;
               if (_.isArray(searches)) {
@@ -1363,9 +1363,9 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
           }
         }
         if (fullText.startsWith(sentContent)) {
-          const chunk = getSafeStreamChunk(fullText, sentContent);
+          const chunk = fullText.substring(sentContent.length);
           if (chunk) {
-            sentContent += chunk;
+            sentContent = fullText;
             const data = `data: ${JSON.stringify({
             id: result.conversation_id,
             model: MODEL_NAME,
