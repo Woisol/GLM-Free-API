@@ -43,7 +43,7 @@ function getSafeStreamText(text: string) {
   const possibleMarker = safeText.substring(markerStart);
   // Keep every valid prefix, including the bare "【turn", buffered. Sending
   // it would make the later cleaned snapshot shorter than sentContent.
-  if (/^【turn(?:\d*[a-z]*\d*)?$/i.test(possibleMarker)) {
+  if (/^【(?:turn(?:\d*[a-z]*\d*)?)?$/i.test(possibleMarker)) {
     safeText = safeText.substring(0, markerStart);
   }
   return safeText;
@@ -1317,10 +1317,7 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
           part.content.forEach((value) => {
             const { type, text, think, image, code, content: innerContent } = value;
             if (type == "text" && _.isString(text)) {
-              // Do not rewrite already-sent citation markers when search
-              // metadata arrives later; that would invalidate the prefix
-              // comparison and drop the rest of the answer.
-              fullText += getSafeStreamText(text);
+              fullText += text;
             } else if (type == "think" && _.isString(think) && !isSilentModel) {
               fullReasoning += getSafeStreamText(think);
             } else if (type == "tool_result" && !isSilentModel) {
@@ -1345,6 +1342,11 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
             }
           });
         });
+
+        // Sanitize the complete snapshot, rather than each token separately.
+        // Markers may be split across content items or logical parts.
+        fullText = getSafeStreamText(fullText);
+        fullReasoning = getSafeStreamText(fullReasoning);
 
         // Each upstream value is a cumulative snapshot. Only emit a suffix
         // while the snapshot still contains everything already sent.
